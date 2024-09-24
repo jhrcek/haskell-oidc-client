@@ -20,8 +20,7 @@ import           Data.IORef                           (IORef,
 import           Data.List                            as L
 import           Data.Map                             (Map)
 import qualified Data.Map                             as M
-import           Data.Maybe                           (Maybe (..), fromMaybe)
-import           Data.Monoid                          ((<>))
+import           Data.Maybe                           (fromMaybe)
 import           Data.Text                            as T
 import           Data.Text.Encoding                   (decodeUtf8)
 import           Data.Text.Lazy                       as TL
@@ -167,7 +166,7 @@ run' = do
             { sessionStoreGenerate = genBytes cprg
             , sessionStoreSave     = saveState ssm sid
             , sessionStoreGet      = getStateBy ssm sid
-            , sessionStoreDelete   = const $ deleteState ssm sid 
+            , sessionStoreDelete   = const $ deleteState ssm sid
             }
 
     blaze = html . renderHtml

@@ -8,8 +8,7 @@ module Main where
 import           Control.Monad.IO.Class               (liftIO)
 import           Control.Monad.Reader                 (ReaderT, ask, lift,
                                                        runReaderT)
-import           Crypto.Random.AESCtr                 (AESRNG, makeSystem)
-import           Crypto.Random.API                    (cprgGenBytes)
+import           Crypto.Random                        (SystemDRG, getSystemDRG, randomBytesGenerate)
 import           Data.Aeson                           (FromJSON)
 import           Data.ByteString                      (ByteString)
 import           Data.ByteString.Base64.URL           (encode)
@@ -49,7 +48,7 @@ type SessionStateMap = Map T.Text (O.State, O.Nonce)
 
 data AuthServerEnv = AuthServerEnv
     { oidc :: O.OIDC
-    , cprg :: IORef AESRNG
+    , sdrg :: IORef SystemDRG
     , ssm  :: IORef SessionStateMap
     , mgr  :: Manager
     }
@@ -73,13 +72,13 @@ main = do
     let port = getPort baseUrl
         redirectUri = baseUrl <> "/login/cb"
 
-    cprg <- makeSystem >>= newIORef
+    sdrg <- getSystemDRG >>= newIORef
     ssm  <- newIORef M.empty
     mgr  <- newManager tlsManagerSettings
     prov <- O.discover "https://accounts.google.com" mgr
     let oidc = O.setCredentials clientId clientSecret redirectUri $ O.newOIDC prov
 
-    run port oidc cprg ssm mgr
+    run port oidc sdrg ssm mgr
 
 getPort :: ByteString -> Int
 getPort bs = fromMaybe 3000 port
@@ -90,10 +89,10 @@ getPort bs = fromMaybe 3000 port
         xs  -> let p = (!! 0) . L.reverse $ xs
                     in fst <$> B.readInt p
 
-run :: Int -> O.OIDC -> IORef AESRNG -> IORef SessionStateMap -> Manager -> IO ()
-run port oidc cprg ssm mgr = scottyT port runReader run'
+run :: Int -> O.OIDC -> IORef SystemDRG -> IORef SessionStateMap -> Manager -> IO ()
+run port oidc sdrg ssm mgr = scottyT port runReader run'
   where
-    runReader a = runReaderT a (AuthServerEnv oidc cprg ssm mgr)
+    runReader a = runReaderT a (AuthServerEnv oidc sdrg ssm mgr)
 
 run' :: AuthServer ()
 run' = do
@@ -105,8 +104,8 @@ run' = do
     post "/login" $ do
         AuthServerEnv{..} <- lift ask
 
-        sid <- genSessionId cprg
-        let store = sessionStoreFromSession cprg ssm sid
+        sid <- genSessionId sdrg
+        let store = sessionStoreFromSession sdrg ssm sid
         loc <- liftIO $ O.prepareAuthenticationRequestUrl store oidc [O.email, O.profile] []
         setSimpleCookie cookieName sid
         redirect . TL.pack . show $ loc
@@ -129,7 +128,7 @@ run' = do
         case cookie of
             Just sid -> do
                 AuthServerEnv{..} <- lift ask
-                let store = sessionStoreFromSession cprg ssm sid
+                let store = sessionStoreFromSession sdrg ssm sid
                 state <- param "state"
                 code  <- param "code"
                 tokens <- liftIO $ O.getValidTokens store oidc mgr state code
@@ -150,9 +149,9 @@ run' = do
             H.toHtml (email profile)
           H.p $ H.img ! (A.src $ H.textValue $ picture profile)
 
-    gen cprg                   = encode <$> atomicModifyIORef' cprg (swap . cprgGenBytes 64)
-    genSessionId cprg          = liftIO $ decodeUtf8 <$> gen cprg
-    genBytes cprg              = liftIO $ gen cprg
+    gen sdrg                   = encode <$> atomicModifyIORef' sdrg (swap . randomBytesGenerate 64)
+    genSessionId sdrg          = liftIO $ decodeUtf8 <$> gen sdrg
+    genBytes sdrg              = liftIO $ gen sdrg
     saveState ssm sid st nonce = liftIO $ atomicModifyIORef' ssm $ \m -> (M.insert sid (st, nonce) m, ())
     getStateBy ssm sid _st     = liftIO $ do
         m <- M.lookup sid <$> readIORef ssm
@@ -161,9 +160,9 @@ run' = do
             _               -> Nothing
     deleteState ssm sid  = liftIO $ atomicModifyIORef' ssm $ \m -> (M.delete sid m, ())
 
-    sessionStoreFromSession cprg ssm sid =
+    sessionStoreFromSession sdrg ssm sid =
         O.SessionStore
-            { sessionStoreGenerate = genBytes cprg
+            { sessionStoreGenerate = genBytes sdrg
             , sessionStoreSave     = saveState ssm sid
             , sessionStoreGet      = getStateBy ssm sid
             , sessionStoreDelete   = const $ deleteState ssm sid

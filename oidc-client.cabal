@@ -115,11 +115,11 @@ executable scotty-example
     , containers
     , mtl
     , wai-extra
+    -- scotty-cookie not compatible with scotty 0.20+
     , scotty < 0.20
     , scotty-cookie
     , blaze-html
-    , cprng-aes
-    , crypto-random
+    , crypton ^>= 0.34
     , base64-bytestring
     , http-types
     , http-client

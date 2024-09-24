@@ -1,11 +1,10 @@
-resolver: nightly-2024-03-07
+resolver: nightly-2024-09-24
 
 packages:
   - "."
 
 # Dependency packages to be pulled from upstream that are not in the resolver
 extra-deps:
-  - jose-jwt-0.10.0@sha256:6ed175a01c721e317ceea15eb251a81de145c03711a977517935633a5cdec1d4,3546
   - scotty-cookie-0.1.0.3@sha256:3ff1df13a5acba8ba170a5ac22b3ac6a2c227791292536ce1ebfc41038f58fc9,1204
   - crypton-0.34@sha256:9e4b50d79d1fba681befa08151db7223d2b4bb72564853e8530e614105d53a1a,14577
 

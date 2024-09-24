@@ -101,7 +101,7 @@ test-suite oidc-client-spec
 
 executable scotty-example
   import:           warnings
-  if flag(build-examples)
+  if !flag(build-examples)
     buildable: False
   main-is:          Main.hs
   default-language: Haskell2010

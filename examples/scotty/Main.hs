@@ -37,11 +37,13 @@ import qualified Text.Blaze.Html5                     as H
 import           Text.Blaze.Html5                     ((!))
 import qualified Text.Blaze.Html5.Attributes          as A
 import qualified Web.OIDC.Client                      as O
+import qualified Web.OIDC.Client.Discovery.Issuers    as Issuers
 import           Web.Scotty.Cookie                    (getCookie,
                                                        setSimpleCookie)
-import           Web.Scotty.Trans                     (ScottyT, formParam,
-                                                       formParamMaybe, get,
-                                                       html, middleware, post,
+import           Web.Scotty.Trans                     (ScottyT, get, html,
+                                                       middleware, post,
+                                                       queryParam,
+                                                       queryParamMaybe,
                                                        redirect, scottyT,
                                                        status, text)
 
@@ -76,7 +78,7 @@ main = do
     sdrg <- getSystemDRG >>= newIORef
     ssm  <- newIORef M.empty
     mgr  <- newManager tlsManagerSettings
-    prov <- O.discover "https://accounts.google.com" mgr
+    prov <- O.discover Issuers.google mgr
     let oidc = O.setCredentials clientId clientSecret redirectUri $ O.newOIDC prov
 
     run port oidc sdrg ssm mgr
@@ -112,7 +114,7 @@ run' = do
         redirect . TL.pack . show $ loc
 
     get "/login/cb" $ do
-        err <- formParamMaybe "error"
+        err <- queryParamMaybe "error"
         case err of
             Just e  -> status401 e
             Nothing -> getCookie cookieName >>= doCallback
@@ -130,8 +132,8 @@ run' = do
             Just sid -> do
                 AuthServerEnv{..} <- lift ask
                 let store = sessionStoreFromSession sdrg ssm sid
-                state <- formParam "state"
-                code  <- formParam "code"
+                state <- queryParam "state"
+                code  <- queryParam "code"
                 tokens <- liftIO $ O.getValidTokens store oidc mgr state code
                 blaze $ htmlResult tokens
             Nothing  -> status400 "cookie not found"

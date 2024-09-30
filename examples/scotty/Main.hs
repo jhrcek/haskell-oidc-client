@@ -1,14 +1,14 @@
-{-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE DeriveGeneric     #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards   #-}
-{-# LANGUAGE DeriveGeneric   #-}
 
 module Main where
 
 import           Control.Monad.IO.Class               (liftIO)
 import           Control.Monad.Reader                 (ReaderT, ask, lift,
                                                        runReaderT)
-import           Crypto.Random                        (SystemDRG, getSystemDRG, randomBytesGenerate)
+import           Crypto.Random                        (SystemDRG, getSystemDRG,
+                                                       randomBytesGenerate)
 import           Data.Aeson                           (FromJSON)
 import           Data.ByteString                      (ByteString)
 import           Data.ByteString.Base64.URL           (encode)
@@ -24,7 +24,7 @@ import           Data.Text                            as T
 import           Data.Text.Encoding                   (decodeUtf8)
 import           Data.Text.Lazy                       as TL
 import           Data.Tuple                           (swap)
-import           GHC.Generics (Generic)
+import           GHC.Generics                         (Generic)
 import           Network.HTTP.Client                  (Manager, newManager)
 import           Network.HTTP.Client.TLS              (tlsManagerSettings)
 import           Network.HTTP.Types                   (badRequest400,
@@ -33,16 +33,17 @@ import           Network.Wai.Middleware.RequestLogger (logStdoutDev)
 import           System.Environment                   (getEnv)
 import           Text.Blaze.Html                      (Html)
 import           Text.Blaze.Html.Renderer.Text        (renderHtml)
-import           Text.Blaze.Html5                     ((!))
 import qualified Text.Blaze.Html5                     as H
+import           Text.Blaze.Html5                     ((!))
 import qualified Text.Blaze.Html5.Attributes          as A
 import qualified Web.OIDC.Client                      as O
 import           Web.Scotty.Cookie                    (getCookie,
                                                        setSimpleCookie)
-import           Web.Scotty.Trans                     (ScottyT, get, html,
-                                                       middleware, param, post,
-                                                       redirect, rescue,
-                                                       scottyT, status, text)
+import           Web.Scotty.Trans                     (ScottyT, formParam,
+                                                       formParamMaybe, get,
+                                                       html, middleware, post,
+                                                       redirect, scottyT,
+                                                       status, text)
 
 type SessionStateMap = Map T.Text (O.State, O.Nonce)
 
@@ -53,7 +54,7 @@ data AuthServerEnv = AuthServerEnv
     , mgr  :: Manager
     }
 
-type AuthServer a = ScottyT TL.Text (ReaderT AuthServerEnv IO) a
+type AuthServer a = ScottyT (ReaderT AuthServerEnv IO) a
 
 data ProfileClaims = ProfileClaims
     { name    :: T.Text
@@ -111,7 +112,7 @@ run' = do
         redirect . TL.pack . show $ loc
 
     get "/login/cb" $ do
-        err <- param' "error"
+        err <- formParamMaybe "error"
         case err of
             Just e  -> status401 e
             Nothing -> getCookie cookieName >>= doCallback
@@ -129,8 +130,8 @@ run' = do
             Just sid -> do
                 AuthServerEnv{..} <- lift ask
                 let store = sessionStoreFromSession sdrg ssm sid
-                state <- param "state"
-                code  <- param "code"
+                state <- formParam "state"
+                code  <- formParam "code"
                 tokens <- liftIO $ O.getValidTokens store oidc mgr state code
                 blaze $ htmlResult tokens
             Nothing  -> status400 "cookie not found"
@@ -147,7 +148,7 @@ run' = do
           H.p $ do
             H.toHtml ("Email: " :: T.Text)
             H.toHtml (email profile)
-          H.p $ H.img ! (A.src $ H.textValue $ picture profile)
+          H.p $ H.img ! A.src (H.textValue $ picture profile)
 
     gen sdrg                   = encode <$> atomicModifyIORef' sdrg (swap . randomBytesGenerate 64)
     genSessionId sdrg          = liftIO $ decodeUtf8 <$> gen sdrg
@@ -169,6 +170,5 @@ run' = do
             }
 
     blaze = html . renderHtml
-    param' n = (Just <$> param n) `rescue` (\_ -> return Nothing)
     status400 m = status badRequest400   >> text m
     status401 m = status unauthorized401 >> text m

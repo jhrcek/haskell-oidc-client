@@ -27,7 +27,7 @@ flag network-uri
   default: True
 
 flag build-examples
-  default: False
+  default: True
 
 common warnings
   ghc-options: -Wunused-packages -Wall
@@ -115,9 +115,7 @@ executable scotty-example
     , containers
     , mtl
     , wai-extra
-    -- scotty-cookie not compatible with scotty 0.20+
-    , scotty < 0.20
-    , scotty-cookie
+    , scotty ^>= 0.22
     , blaze-html
     , crypton ^>= 0.34
     , base64-bytestring

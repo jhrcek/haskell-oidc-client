@@ -52,7 +52,9 @@ jobs:
         run: stack build --resolver ${{ matrix.resolver }}
 
       - name: Build examples
-        run:  stack build --flag oidc-client:build-examples --resolver ${{ matrix.resolver }}
+        # Disabled with the 2 olderst resolvers, because they require too many extra-deps
+        if: matrix.resolver != 'lts-18' && matrix.resolver != 'lts-19'
+        run: stack build --flag oidc-client:build-examples --resolver ${{ matrix.resolver }}
 
       - name: Run tests
         run: stack test --resolver ${{ matrix.resolver }}

@@ -27,7 +27,7 @@ flag network-uri
   default: True
 
 flag build-examples
-  default: True
+  default: False
 
 common warnings
   ghc-options: -Wunused-packages -Wall

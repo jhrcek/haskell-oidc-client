@@ -25,7 +25,7 @@ import           Data.Text.Encoding                   (decodeUtf8)
 import           Data.Text.Lazy                       as TL
 import           Data.Tuple                           (swap)
 import           GHC.Generics                         (Generic)
-import           Network.HTTP.Client                  (Manager, newManager)
+import           Network.HTTP.Client                  (newManager)
 import           Network.HTTP.Client.TLS              (tlsManagerSettings)
 import           Network.HTTP.Types                   (badRequest400,
                                                        unauthorized401)
@@ -37,13 +37,12 @@ import qualified Text.Blaze.Html5                     as H
 import           Text.Blaze.Html5                     ((!))
 import qualified Text.Blaze.Html5.Attributes          as A
 import qualified Web.OIDC.Client                      as O
-import qualified Web.OIDC.Client.Discovery.Issuers    as Issuers
+import qualified Web.OIDC.Client.IdTokenFlow          as IdTokenFlow
 import           Web.Scotty.Cookie                    (getCookie,
                                                        setSimpleCookie)
-import           Web.Scotty.Trans                     (ScottyT, get, html,
-                                                       middleware, post,
-                                                       queryParam,
-                                                       queryParamMaybe,
+import           Web.Scotty.Trans                     (ScottyT, formParam,
+                                                       formParamMaybe, get,
+                                                       html, middleware, post,
                                                        redirect, scottyT,
                                                        status, text)
 
@@ -53,15 +52,14 @@ data AuthServerEnv = AuthServerEnv
     { oidc :: O.OIDC
     , sdrg :: IORef SystemDRG
     , ssm  :: IORef SessionStateMap
-    , mgr  :: Manager
     }
 
 type AuthServer a = ScottyT (ReaderT AuthServerEnv IO) a
 
 data ProfileClaims = ProfileClaims
-    { name    :: T.Text
-    , email   :: T.Text
-    , picture :: T.Text
+    { name  :: T.Text
+    , email :: T.Text
+    , oid   :: T.Text -- https://learn.microsoft.com/en-us/entra/identity-platform/id-token-claims-reference#use-claims-to-reliably-identify-a-user
     } deriving (Show, Generic)
 
 instance FromJSON ProfileClaims
@@ -78,10 +76,10 @@ main = do
     sdrg <- getSystemDRG >>= newIORef
     ssm  <- newIORef M.empty
     mgr  <- newManager tlsManagerSettings
-    prov <- O.discover Issuers.google mgr
+    prov <- O.discover "https://login.microsoftonline.com/51c57df9-9362-47d4-a307-e5e76dcb3b15/v2.0" mgr
     let oidc = O.setCredentials clientId clientSecret redirectUri $ O.newOIDC prov
 
-    run port oidc sdrg ssm mgr
+    run port oidc sdrg ssm
 
 getPort :: ByteString -> Int
 getPort bs = fromMaybe 3000 port
@@ -92,10 +90,10 @@ getPort bs = fromMaybe 3000 port
         xs  -> let p = (!! 0) . L.reverse $ xs
                     in fst <$> B.readInt p
 
-run :: Int -> O.OIDC -> IORef SystemDRG -> IORef SessionStateMap -> Manager -> IO ()
-run port oidc sdrg ssm mgr = scottyT port runReader run'
+run :: Int -> O.OIDC -> IORef SystemDRG -> IORef SessionStateMap ->  IO ()
+run port oidc sdrg ssm = scottyT port runReader run'
   where
-    runReader a = runReaderT a (AuthServerEnv oidc sdrg ssm mgr)
+    runReader a = runReaderT a (AuthServerEnv oidc sdrg ssm)
 
 run' :: AuthServer ()
 run' = do
@@ -109,12 +107,12 @@ run' = do
 
         sid <- genSessionId sdrg
         let store = sessionStoreFromSession sdrg ssm sid
-        loc <- liftIO $ O.prepareAuthenticationRequestUrl store oidc [O.email, O.profile] []
+        loc <- liftIO $ IdTokenFlow.prepareAuthenticationRequestUrl store oidc [O.email, O.profile] []
         setSimpleCookie cookieName sid
-        redirect . TL.pack . show $ loc
+        redirect . TL.pack $ show loc
 
-    get "/login/cb" $ do
-        err <- queryParamMaybe "error"
+    post "/login/cb" $ do
+        err <- formParamMaybe "error"
         case err of
             Just e  -> status401 e
             Nothing -> getCookie cookieName >>= doCallback
@@ -132,25 +130,27 @@ run' = do
             Just sid -> do
                 AuthServerEnv{..} <- lift ask
                 let store = sessionStoreFromSession sdrg ssm sid
-                state <- queryParam "state"
-                code  <- queryParam "code"
-                tokens <- liftIO $ O.getValidTokens store oidc mgr state code
+                state <- formParam "state"
+                idToken  <- formParam "id_token"
+                tokens <- liftIO $ IdTokenFlow.getValidIdTokenClaims store oidc state (pure idToken)
                 blaze $ htmlResult tokens
             Nothing  -> status400 "cookie not found"
 
-    htmlResult :: O.Tokens ProfileClaims -> Html
-    htmlResult tokens = do
+    htmlResult :: O.IdTokenClaims ProfileClaims -> Html
+    htmlResult tokenClaims = do
         H.h1 "Result"
-        H.pre . H.toHtml . show $ tokens
-        let profile = O.otherClaims $ O.idToken tokens
+        H.p . H.toHtml $ show tokenClaims
+        let profile = O.otherClaims tokenClaims
         H.div $ do
-          H.p $ do
-            H.toHtml ("Name: " :: T.Text)
-            H.toHtml (name profile)
-          H.p $ do
-            H.toHtml ("Email: " :: T.Text)
-            H.toHtml (email profile)
-          H.p $ H.img ! A.src (H.textValue $ picture profile)
+            H.p $ do
+                H.toHtml ("Name: " :: T.Text)
+                H.toHtml (name profile)
+            H.p $ do
+                H.toHtml ("Email: " :: T.Text)
+                H.toHtml (email profile)
+            H.p $ do
+                H.toHtml ("OID: " :: T.Text)
+                H.toHtml (oid profile)
 
     gen sdrg                   = encode <$> atomicModifyIORef' sdrg (swap . randomBytesGenerate 64)
     genSessionId sdrg          = liftIO $ decodeUtf8 <$> gen sdrg

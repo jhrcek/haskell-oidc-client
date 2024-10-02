@@ -37,7 +37,7 @@ import qualified Text.Blaze.Html5                     as H
 import           Text.Blaze.Html5                     ((!))
 import qualified Text.Blaze.Html5.Attributes          as A
 import qualified Web.OIDC.Client                      as O
-import qualified Web.OIDC.Client.Discovery.Issuers    as Issuers
+import qualified Web.OIDC.Client.CodeFlow             as CodeFlow
 import           Web.Scotty.Cookie                    (getCookie,
                                                        setSimpleCookie)
 import           Web.Scotty.Trans                     (ScottyT, get, html,
@@ -59,9 +59,9 @@ data AuthServerEnv = AuthServerEnv
 type AuthServer a = ScottyT (ReaderT AuthServerEnv IO) a
 
 data ProfileClaims = ProfileClaims
-    { name    :: T.Text
-    , email   :: T.Text
-    , picture :: T.Text
+    { name  :: T.Text
+    , email :: T.Text
+    , oid   :: T.Text -- https://learn.microsoft.com/en-us/entra/identity-platform/id-token-claims-reference#use-claims-to-reliably-identify-a-user
     } deriving (Show, Generic)
 
 instance FromJSON ProfileClaims
@@ -78,7 +78,7 @@ main = do
     sdrg <- getSystemDRG >>= newIORef
     ssm  <- newIORef M.empty
     mgr  <- newManager tlsManagerSettings
-    prov <- O.discover Issuers.google mgr
+    prov <- O.discover "https://login.microsoftonline.com/51c57df9-9362-47d4-a307-e5e76dcb3b15/v2.0" mgr
     let oidc = O.setCredentials clientId clientSecret redirectUri $ O.newOIDC prov
 
     run port oidc sdrg ssm mgr
@@ -92,7 +92,7 @@ getPort bs = fromMaybe 3000 port
         xs  -> let p = (!! 0) . L.reverse $ xs
                     in fst <$> B.readInt p
 
-run :: Int -> O.OIDC -> IORef SystemDRG -> IORef SessionStateMap -> Manager -> IO ()
+run :: Int -> O.OIDC -> IORef SystemDRG -> IORef SessionStateMap -> Manager ->  IO ()
 run port oidc sdrg ssm mgr = scottyT port runReader run'
   where
     runReader a = runReaderT a (AuthServerEnv oidc sdrg ssm mgr)
@@ -109,9 +109,9 @@ run' = do
 
         sid <- genSessionId sdrg
         let store = sessionStoreFromSession sdrg ssm sid
-        loc <- liftIO $ O.prepareAuthenticationRequestUrl store oidc [O.email, O.profile] []
+        loc <- liftIO $ CodeFlow.prepareAuthenticationRequestUrl store oidc [O.email, O.profile] []
         setSimpleCookie cookieName sid
-        redirect . TL.pack . show $ loc
+        redirect . TL.pack $ show loc
 
     get "/login/cb" $ do
         err <- queryParamMaybe "error"
@@ -134,23 +134,25 @@ run' = do
                 let store = sessionStoreFromSession sdrg ssm sid
                 state <- queryParam "state"
                 code  <- queryParam "code"
-                tokens <- liftIO $ O.getValidTokens store oidc mgr state code
+                tokens <- liftIO $ CodeFlow.getValidTokens store oidc mgr state code
                 blaze $ htmlResult tokens
             Nothing  -> status400 "cookie not found"
 
     htmlResult :: O.Tokens ProfileClaims -> Html
     htmlResult tokens = do
         H.h1 "Result"
-        H.pre . H.toHtml . show $ tokens
+        H.p . H.toHtml $ show tokens
         let profile = O.otherClaims $ O.idToken tokens
         H.div $ do
-          H.p $ do
-            H.toHtml ("Name: " :: T.Text)
-            H.toHtml (name profile)
-          H.p $ do
-            H.toHtml ("Email: " :: T.Text)
-            H.toHtml (email profile)
-          H.p $ H.img ! A.src (H.textValue $ picture profile)
+            H.p $ do
+                H.toHtml ("Name: " :: T.Text)
+                H.toHtml (name profile)
+            H.p $ do
+                H.toHtml ("Email: " :: T.Text)
+                H.toHtml (email profile)
+            H.p $ do
+                H.toHtml ("OID: " :: T.Text)
+                H.toHtml (oid profile)
 
     gen sdrg                   = encode <$> atomicModifyIORef' sdrg (swap . randomBytesGenerate 64)
     genSessionId sdrg          = liftIO $ decodeUtf8 <$> gen sdrg

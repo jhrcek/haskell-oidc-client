@@ -25,7 +25,7 @@ import           Data.Text.Encoding                   (decodeUtf8)
 import           Data.Text.Lazy                       as TL
 import           Data.Tuple                           (swap)
 import           GHC.Generics                         (Generic)
-import           Network.HTTP.Client                  (newManager)
+import           Network.HTTP.Client                  (Manager, newManager)
 import           Network.HTTP.Client.TLS              (tlsManagerSettings)
 import           Network.HTTP.Types                   (badRequest400,
                                                        unauthorized401)
@@ -37,12 +37,13 @@ import qualified Text.Blaze.Html5                     as H
 import           Text.Blaze.Html5                     ((!))
 import qualified Text.Blaze.Html5.Attributes          as A
 import qualified Web.OIDC.Client                      as O
-import qualified Web.OIDC.Client.IdTokenFlow          as IdTokenFlow
+import qualified Web.OIDC.Client.CodeFlow             as CodeFlow
 import           Web.Scotty.Cookie                    (getCookie,
                                                        setSimpleCookie)
-import           Web.Scotty.Trans                     (ScottyT, formParam,
-                                                       formParamMaybe, get,
-                                                       html, middleware, post,
+import           Web.Scotty.Trans                     (ScottyT, get, html,
+                                                       middleware, post,
+                                                       queryParam,
+                                                       queryParamMaybe,
                                                        redirect, scottyT,
                                                        status, text)
 
@@ -52,6 +53,7 @@ data AuthServerEnv = AuthServerEnv
     { oidc :: O.OIDC
     , sdrg :: IORef SystemDRG
     , ssm  :: IORef SessionStateMap
+    , mgr  :: Manager
     }
 
 type AuthServer a = ScottyT (ReaderT AuthServerEnv IO) a
@@ -79,7 +81,7 @@ main = do
     prov <- O.discover "https://login.microsoftonline.com/51c57df9-9362-47d4-a307-e5e76dcb3b15/v2.0" mgr
     let oidc = O.setCredentials clientId clientSecret redirectUri $ O.newOIDC prov
 
-    run port oidc sdrg ssm
+    run port oidc sdrg ssm mgr
 
 getPort :: ByteString -> Int
 getPort bs = fromMaybe 3000 port
@@ -90,10 +92,10 @@ getPort bs = fromMaybe 3000 port
         xs  -> let p = (!! 0) . L.reverse $ xs
                     in fst <$> B.readInt p
 
-run :: Int -> O.OIDC -> IORef SystemDRG -> IORef SessionStateMap ->  IO ()
-run port oidc sdrg ssm = scottyT port runReader run'
+run :: Int -> O.OIDC -> IORef SystemDRG -> IORef SessionStateMap -> Manager ->  IO ()
+run port oidc sdrg ssm mgr = scottyT port runReader run'
   where
-    runReader a = runReaderT a (AuthServerEnv oidc sdrg ssm)
+    runReader a = runReaderT a (AuthServerEnv oidc sdrg ssm mgr)
 
 run' :: AuthServer ()
 run' = do
@@ -107,12 +109,12 @@ run' = do
 
         sid <- genSessionId sdrg
         let store = sessionStoreFromSession sdrg ssm sid
-        loc <- liftIO $ IdTokenFlow.prepareAuthenticationRequestUrl store oidc [O.email, O.profile] []
+        loc <- liftIO $ CodeFlow.prepareAuthenticationRequestUrl store oidc [O.email, O.profile] []
         setSimpleCookie cookieName sid
         redirect . TL.pack $ show loc
 
-    post "/login/cb" $ do
-        err <- formParamMaybe "error"
+    get "/login/cb" $ do
+        err <- queryParamMaybe "error"
         case err of
             Just e  -> status401 e
             Nothing -> getCookie cookieName >>= doCallback
@@ -130,17 +132,17 @@ run' = do
             Just sid -> do
                 AuthServerEnv{..} <- lift ask
                 let store = sessionStoreFromSession sdrg ssm sid
-                state <- formParam "state"
-                idToken  <- formParam "id_token"
-                tokens <- liftIO $ IdTokenFlow.getValidIdTokenClaims store oidc state (pure idToken)
+                state <- queryParam "state"
+                code  <- queryParam "code"
+                tokens <- liftIO $ CodeFlow.getValidTokens store oidc mgr state code
                 blaze $ htmlResult tokens
             Nothing  -> status400 "cookie not found"
 
-    htmlResult :: O.IdTokenClaims ProfileClaims -> Html
-    htmlResult tokenClaims = do
+    htmlResult :: O.Tokens ProfileClaims -> Html
+    htmlResult tokens = do
         H.h1 "Result"
-        H.p . H.toHtml $ show tokenClaims
-        let profile = O.otherClaims tokenClaims
+        H.p . H.toHtml $ show tokens
+        let profile = O.otherClaims $ O.idToken tokens
         H.div $ do
             H.p $ do
                 H.toHtml ("Name: " :: T.Text)

@@ -20,16 +20,17 @@ The documentation is available in [Hackage](https://hackage.haskell.org/package/
 `examples/scotty` is a runnable code. If you try to run it, execute commands as follows:
 
 ```sh
-$ stack build --flag oidc-client:build-examples
+stack build --flag oidc-client:build-examples
 ```
 
 and then
 
 ```sh
-$ export OPENID_CLIENT_BASE_URL="http://localhost:3000"
-$ export OPENID_CLIENT_ID="Your client ID"
-$ export OPENID_CLIENT_SECRET="Your client secret"
-$ stack exec scotty-example
+stack build --flag oidc-client:build-examples && \
+OPENID_CLIENT_BASE_URL="http://localhost:3000" \
+OPENID_CLIENT_ID="8e4cf68b-5159-4837-93c3-20714bac76ee" \
+OPENID_CLIENT_SECRET="..." \
+stack exec scotty-example
 ```
 
 You can access to <http://localhost:3000/login>.
